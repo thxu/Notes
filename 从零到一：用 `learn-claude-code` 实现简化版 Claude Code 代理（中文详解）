@@ -1,0 +1,518 @@
+# 从零到一：用 `learn-claude-code` 实现简化版 Claude Code 代理（中文详解）
+
+## 🌟 文章摘要
+
+在人工智能领域，Claude Code 代表了一种新型的编程助手，它不仅仅是代码生成工具，更是一个智能代理系统，能够自主执行任务、调用工具、管理上下文。本文基于开源仓库 `learn-claude-code`，一步步指导你构建一个简化版的 Claude Code。通过这个过程，你将深入理解 LLM（大语言模型）代理的核心架构：**模型（Agent）** 负责决策，**工具系统（Harness）** 负责执行。
+
+核心理念：
+- **模型是智能大脑**：Claude/GPT 等 LLM 负责理解任务、制定计划、调用工具。
+- **Harness 是执行环境**：提供工具、上下文管理、任务调度、子代理协作等机制。
+- **价值**：从理论到实践，掌握 Agent 设计模式，适用于自动化编程、代码审查、项目管理等场景。
+
+本文将通过仓库中的 12 个渐进式模块（s01 到 s12），展示如何从最小循环构建到完整系统。每个步骤都包含代码解读、运行示例和关键洞察。
+
+---
+
+## 🧱 一、前提与准备
+
+### 1.1 仓库概述
+`learn-claude-code` 是 Anthropic 官方的教学仓库，旨在通过 Python 代码演示 Claude Code 的内部机制。它不是完整的 Claude Code 实现，而是“学习版”，强调模块化设计。你可以从这里起步，逐步添加功能，最终构建自己的 Agent 系统。
+
+仓库结构：
+- [`agents`](agents )：12 个渐进式 Agent 实现，从简单到复杂。
+- [`skills`](skills )：可插拔的知识模块（如代码审查、PDF 处理）。
+- [`docs`](docs )：多语言文档，详细解释每个概念。
+- [`web`](web )：Next.js 前端，用于可视化 Agent 执行流程。
+
+### 1.2 环境搭建
+1. **克隆仓库**：
+   ```bash
+   git clone https://github.com/shareAI-lab/learn-claude-code
+   cd learn-claude-code
+   ```
+
+2. **安装依赖**：
+   ```bash
+   pip install -r requirements.txt
+   ```
+   依赖包括 `anthropic`（Claude API）、`openai`（可选）、`rich`（终端美化）等。
+
+3. **配置 API Key**：
+   - 复制环境文件：`cp [`.env.example`](.env.example ) .env`
+   - 编辑 `.env`，添加 `ANTHROPIC_API_KEY=your_key_here`
+   - 如果使用其他模型（如 GPT），添加相应 Key。
+
+4. **验证环境**：
+   ```bash
+   python -c "import anthropic; print('Claude API ready')"
+   ```
+
+### 1.3 学习路径
+- **顺序执行**：从 `s01_agent_loop.py` 开始，每个文件都是前一个的扩展。
+- **终极目标**：运行 `s_full.py`，体验完整系统。
+- **实践建议**：边读代码边运行，观察输出日志。每个模块都有注释，解释关键逻辑。
+
+---
+
+## 🔁 二、核心循环（最小可运行 Agent） — s01
+
+### 2.1 背景
+在构建 Agent 时，最基础的需求是让 LLM 能与外部世界交互，而非只是生成文本。传统的聊天机器人只能“说”，无法“做”。核心循环解决了这个问题，让模型能反复决策和执行，形成闭环。
+
+### 2.2 当前问题
+如果没有循环，Agent 只能单次响应，无法处理多步骤任务（如读取文件后修改）。此外，缺乏工具调用会导致模型只能“猜测”结果，无法验证或执行。
+
+### 2.3 解决方式
+引入无限循环：模型响应 → 检查是否需要工具 → 执行工具 → 将结果反馈给模型 → 继续。关键代码在循环条件和工具处理上。
+
+文件位置：[`agents/s01_agent_loop.py`](agents/s01_agent_loop.py "agents/s01_agent_loop.py")
+
+### 2.4 代码结构与关键代码
+```python
+messages = [{"role": "user", "content": "Hello, Claude!"}]  # 初始化对话
+
+while True:  # 无限循环，确保持续交互
+    response = client.messages.create(
+        model="claude-3-5-sonnet-20241022",
+        max_tokens=1024,
+        messages=messages,
+        tools=tools  # 工具定义
+    )
+    
+    if response.stop_reason == "tool_use":  # 检查是否需要工具
+        # 执行工具
+        tool_name = response.content[0].name
+        tool_args = response.content[0].input
+        result = TOOL_HANDLERS[tool_name](**tool_args)  # 调用工具函数
+        # 将结果塞回 messages，确保上下文连续
+        messages.append({"role": "assistant", "content": response.content})
+        messages.append({"role": "user", "content": f"Tool result: {result}"})
+    else:
+        # 最终答复
+        print(response.content[0].text)
+        break  # 退出循环
+```
+
+### 2.5 运行示例
+```bash
+python agents/s01_agent_loop.py
+```
+输入："帮我列出当前目录的文件"
+
+输出：
+- 模型调用 `list_dir` 工具
+- 执行结果：显示文件列表
+- 模型总结："当前目录有 README.md, agents/, docs/ 等"
+
+### 2.6 关键洞察
+- **决策 vs 执行分离**：模型只“说”要做什么，工具负责“做”。
+- **上下文积累**：`messages` 记录历史，确保连续性。
+- **为什么重要**：这是 Agent 的“心脏”，所有复杂功能都基于此循环。
+- **扩展点**：添加更多工具、状态管理、错误处理。
+
+---
+
+## 🛠️ 三、工具系统扩展 — s02
+
+### 3.1 背景
+单一工具（如 s01 的 `list_dir`）限制了 Agent 的能力。现实任务需要文件读写、搜索、命令执行等多样操作。工具扩展让 Agent 成为“多功能助手”。
+
+### 3.2 当前问题
+s01 只有一个工具，Agent 无法处理复杂任务，如搜索代码或修改文件。工具调用硬编码，无法动态添加新功能。
+
+### 3.3 解决方式
+引入工具注册系统：定义 `tools` 列表和 `TOOL_HANDLERS` 字典。新工具只需添加 spec 和 handler，不改循环逻辑。
+
+文件位置：[`agents/s02_tool_use.py`](agents/s02_tool_use.py "agents/s02_tool_use.py")
+
+### 3.4 工具注册机制与关键代码
+- **工具定义**：每个工具有一个 `spec`（名称、描述、参数）和 `handler`（执行函数）。
+- **示例工具**：
+  - `bash`：执行 shell 命令
+  - `read_file`：读取文件内容
+  - `grep_search`：文本搜索
+- **注册方式**：
+  ```python
+  tools = [
+      {
+          "name": "bash",
+          "description": "Run a bash command",
+          "input_schema": {"type": "object", "properties": {"command": {"type": "string"}}}
+      }
+  ]
+  TOOL_HANDLERS = {"bash": run_bash}  # 字典映射工具名到函数
+  ```
+
+### 3.5 运行示例
+输入："读取 [`README.md`](README.md ) 的前10行"
+
+- 模型调用 `read_file(path="README.md", start_line=1, end_line=10)`
+- 执行：读取文件
+- 输出：文件内容摘要
+
+### 3.6 关键洞察
+- **模块化**：新工具只需添加 spec 和 handler，不改循环。
+- **安全考虑**：工具执行在沙箱中，避免恶意命令。
+- **性能**：工具调用是同步的，后续模块会引入异步。
+- **为什么重要**：工具丰富度决定 Agent 能力上限。
+
+---
+
+## 🧭 四、任务计划（Todo/任务列表） — s03
+
+### 4.1 背景
+复杂任务（如“构建网站”）容易让 Agent “思维漂移”，即偏离目标或遗漏步骤。任务计划引入“先计划再执行”的模式，提高可靠性。
+
+### 4.2 当前问题
+s02 的 Agent 在多步骤任务中可能遗忘或重复，导致效率低或错误。缺乏任务跟踪，无法验证进度。
+
+### 4.3 解决方式
+添加 Todo 系统：Agent 先生成任务列表，再逐个执行。使用状态管理（pending/done）跟踪进度。
+
+文件位置：[`agents/s03_todo_write.py`](agents/s03_todo_write.py "agents/s03_todo_write.py")
+
+### 4.4 实现机制与关键代码
+- **Todo 模型**：任务列表，每个项有状态（pending/done）。
+- **流程**：
+  1. 用户输入任务
+  2. Agent 生成 todo 列表
+  3. 逐个执行，更新状态
+- **代码片段**：
+  ```python
+  def generate_todo(task):
+      # 调用模型生成步骤
+      response = client.messages.create(...)
+      return parse_todo(response.content)
+  
+  def execute_todo(todo_list):
+      for item in todo_list:
+          if item.status == "pending":  # 检查状态
+              # 执行步骤
+              result = run_tool(item.action)
+              item.status = "done"  # 更新状态
+  ```
+
+### 4.5 运行示例
+输入："帮我创建一个简单的 Python 脚本"
+
+- 生成 Todo：1. 创建文件 2. 写代码 3. 测试运行
+- 执行：逐步完成，输出最终脚本。
+
+### 4.6 关键洞察
+- **控制规模**：防止 Agent 跑偏。
+- **可验证**：用户可调整计划。
+- **扩展**：后续模块将 Todo 持久化到文件。
+
+---
+
+## 🧩 五、子代理（上下文隔离）— s04
+
+### 5.1 背景
+大任务需要分解，但主上下文会积累无关信息，导致 Token 浪费或混乱。子代理提供隔离，让每个子任务独立运行。
+
+### 5.2 当前问题
+s03 的 Todo 执行共享上下文，复杂任务会导致上下文污染，模型难以聚焦。缺乏递归能力，无法处理嵌套任务。
+
+### 5.3 解决方式
+引入 `spawn_subagent`：创建独立 `messages` 会话，执行子任务后合并结果。
+
+文件位置：[`agents/s04_subagent.py`](agents/s04_subagent.py "agents/s04_subagent.py")
+
+### 5.4 实现细节与关键代码
+- **Spawn 子代理**：`spawn_subagent(task)` 创建新会话。
+- **上下文隔离**：子代理的 `messages` 只包含相关历史。
+- **结果合并**：子代理完成时，将结果传回主代理。
+- **代码**：
+  ```python
+  def spawn_subagent(task):
+      sub_messages = [{"role": "user", "content": task}]  # 独立上下文
+      # 运行子循环
+      result = agent_loop(sub_messages)
+      return result  # 合并到主代理
+  ```
+
+### 5.5 运行示例
+输入："先搜索代码，再修改文件"
+
+- 主代理：调用子代理处理搜索
+- 子代理：独立执行搜索，返回结果
+- 主代理：基于结果修改文件
+
+### 5.6 关键洞察
+- **可组合性**：Agent 可以递归调用自己。
+- **安全性**：隔离防止上下文泄露。
+- **多角色**：后续用于团队协作。
+
+---
+
+## 📚 六、知识按需加载（知识注入）— s05
+
+### 6.1 背景
+Agent 需要外部知识（如 API 文档），但预加载所有知识会超 Token 限。按需加载确保高效使用上下文。
+
+### 6.2 当前问题
+s04 的上下文固定，无法动态注入新知识。Agent 缺乏领域专长，回答不准确。
+
+### 6.3 解决方式
+添加 `load_skill` 工具：需要时读取 [`skills`](skills ) 目录文件，注入到 `messages`。
+
+文件位置：[`agents/s05_skill_loading.py`](agents/s05_skill_loading.py "agents/s05_skill_loading.py")
+
+### 6.4 机制与关键代码
+- **Skills 目录**：存放知识模块（如代码审查规则）。
+- **加载工具**：`load_skill(name)` 读取文件，注入到 `messages`。
+- **示例**：
+  ```python
+  def load_skill(skill_name):
+      content = read_file(f"skills/{skill_name}/SKILL.md")
+      messages.append({"role": "system", "content": content})  # 注入知识
+  ```
+
+### 6.5 运行示例
+输入："如何做代码审查？"
+
+- Agent 调用 `load_skill("code-review")`
+- 注入知识：审查规则
+- 输出：基于规则的建议
+
+### 6.6 关键洞察
+- **效率**：只加载相关知识。
+- **动态**：知识可更新，无需重启。
+- **扩展**：支持外部 API 或数据库。
+
+---
+
+## 🧠 七、上下文压缩（Context Compact）— s06
+
+### 7.1 背景
+长对话积累大量 Token，导致成本高或超限。压缩机制保留关键信息，丢弃细节。
+
+### 7.2 当前问题
+s05 的 `messages` 无限增长，模型“遗忘”早期信息，连续性差。
+
+### 7.3 解决方式
+实现三层压缩：近期完整、中期摘要、远期丢弃。
+
+文件位置：[`agents/s06_context_compact.py`](agents/s06_context_compact.py "agents/s06_context_compact.py")
+
+### 7.4 三层压缩与关键代码
+- **近期**：保留完整
+- **中期**：摘要
+- **远期**：丢弃细节，只留关键点
+- **代码**：
+  ```python
+  def compact_context(messages):
+      recent = messages[-10:]  # 最近10条保留完整
+      summary = summarize(messages[:-10])  # 摘要其余
+      return summary + recent  # 合并
+  ```
+
+### 7.5 运行示例
+长任务后，上下文自动压缩，保持性能。
+
+### 7.6 关键洞察
+- **连续性**：压缩后仍能理解历史。
+- **技术**：依赖嵌入模型或简单摘要。
+- **挑战**：平衡信息丢失与效率。
+
+---
+
+## 🗂️ 八、任务系统（Task Graph 持久）— s07
+
+### 8.1 背景
+任务需要跨会话持久化，支持依赖关系，避免重复工作。
+
+### 8.2 当前问题
+s06 的任务临时，崩溃后丢失。缺乏依赖管理，多任务混乱。
+
+### 8.3 解决方式
+引入 Task Graph：持久化到文件，支持拓扑执行。
+
+文件位置：[`agents/s07_task_system.py`](agents/s07_task_system.py "agents/s07_task_system.py")
+
+### 8.4 Graph 结构与关键代码
+- **节点**：任务
+- **边**：依赖
+- **持久**：JSON 文件存储
+- **代码**：
+  ```python
+  class TaskGraph:
+      def add_task(self, task, deps):
+          # 添加到图
+      def execute(self):
+          # 拓扑排序执行
+  ```
+
+### 8.5 运行示例
+多任务项目，Agent 管理依赖，顺序执行。
+
+### 8.6 关键洞察
+- **可靠性**：崩溃后恢复。
+- **协作**：多 Agent 共享任务。
+
+---
+
+## ⏳ 九、后台异步（Background Tasks）— s08
+
+### 9.1 背景
+慢任务（如编译）阻塞主循环，降低响应性。
+
+### 9.2 当前问题
+s07 的工具同步执行，用户等待时间长。
+
+### 9.3 解决方式
+使用线程/进程后台运行，结果通过 Mailbox 通知。
+
+文件位置：[`agents/s08_background_tasks.py`](agents/s08_background_tasks.py "agents/s08_background_tasks.py")
+
+### 9.4 机制与关键代码
+- **线程/进程**：后台运行
+- **Mailbox**：结果通知
+- **代码**：
+  ```python
+  def run_background(task):
+      thread = Thread(target=execute_task)
+      thread.start()  # 后台启动
+      return task_id
+  ```
+
+### 9.5 运行示例
+编译代码时，后台处理，主循环继续。
+
+### 9.6 关键洞察
+- **并发**：提升效率。
+- **复杂性**：需处理同步。
+
+---
+
+## 🤝 十、团队协作协议（Mailbox + 领队）— s09/s10
+
+### 10.1 背景
+单 Agent 能力有限，多 Agent 协作提升效率。
+
+### 10.2 当前问题
+s08 仍是单 Agent，无法分工。
+
+### 10.3 解决方式
+引入 Mailbox 和领队角色，标准化通信。
+
+文件：[`agents/s09_agent_teams.py`](agents/s09_agent_teams.py "agents/s09_agent_teams.py") 和 [`agents/s10_team_protocols.py`](agents/s10_team_protocols.py "agents/s10_team_protocols.py")
+
+### 10.4 协议与关键代码
+- **Mailbox**：共享队列
+- **角色**：领队分配任务
+- **代码**：
+  ```python
+  def team_loop():
+      while True:
+          task = mailbox.get()  # 从队列取任务
+          agent = assign_agent(task)
+          result = agent.execute(task)
+          mailbox.put(result)  # 放回结果
+  ```
+
+### 10.5 运行示例
+开发任务：领队规划，开发者执行，审查者检查。
+
+### 10.6 关键洞察
+- **协作**：分工明确。
+- **协议**：标准化通信。
+
+---
+
+## 🏁 十一、自治代理（自选任务）— s11
+
+### 11.1 背景
+领队模式仍需中央控制，自治让 Agent 自主决策。
+
+### 11.2 当前问题
+s10 的领队是瓶颈，无法扩展。
+
+### 11.3 解决方式
+Agent 自主扫描任务池，选择可处理的任务。
+
+文件：[`agents/s11_autonomous_agents.py`](agents/s11_autonomous_agents.py "agents/s11_autonomous_agents.py")
+
+### 11.4 机制与关键代码
+- **任务池**：共享队列
+- **自主**：Agent 扫描、领取
+- **代码**：
+  ```python
+  def autonomous_loop():
+      while True:
+          task = scan_pool()  # 扫描任务
+          if can_handle(task):
+              execute(task)  # 自主执行
+  ```
+
+### 11.5 运行示例
+多 Agent 自动分配工作。
+
+### 11.6 关键洞察
+- **智能**：决策自主。
+- **扩展**：真实多智能体。
+
+---
+
+## 🧱 十二、工作区隔离（Worktree）— s12
+
+### 12.1 背景
+并发任务可能冲突文件或依赖。
+
+### 12.2 当前问题
+s11 的任务共享工作区，易碰撞。
+
+### 12.3 解决方式
+每个任务用 Git worktree 隔离。
+
+文件：[`agents/s12_worktree_task_isolation.py`](agents/s12_worktree_task_isolation.py "agents/s12_worktree_task_isolation.py")
+
+### 12.4 机制与关键代码
+- **Worktree**：Git 工作树
+- **隔离**：避免冲突
+- **代码**：
+  ```python
+  def create_worktree(task):
+      os.system(f"git worktree add {task.id}")  # 创建隔离目录
+      # 在 worktree 中执行
+  ```
+
+### 12.5 运行示例
+并发任务，各有独立环境。
+
+### 12.6 关键洞察
+- **并发安全**：无碰撞。
+- **生产级**：企业应用。
+
+---
+
+## 🧪 终极（整合版）— s_full
+
+文件：[`agents/s_full.py`](agents/s_full.py "agents/s_full.py")
+
+整合所有功能，形成完整 Harness。运行它，体验从简单到复杂的演化。
+
+---
+
+## 💡 写博客结构建议（章节提纲）
+
+1. 引言：Agent + Harness 理念
+2. 准备：环境搭建
+3. 核心：s01-s12 详细解读
+4. 实践：运行示例和改造
+5. 结论：未来展望
+
+---
+
+## ✨ 撰写提示（内容浓度）
+
+- **图表**：用 Mermaid 画流程图。
+- **代码**：关键片段 + 注释。
+- **对比**：Claude Code vs 简化版。
+- **实践**：鼓励读者运行并修改。
+
+---
+
+## 🏁 结语
+
+通过 `learn-claude-code`，你不仅学到代码，更掌握 Agent 架构思维。从最小循环到完整系统，每一步都是进步。未来，结合训练数据，你可以构建更智能的 Agent。开始你的旅程吧！
